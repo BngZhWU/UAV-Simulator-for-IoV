@@ -76,10 +76,51 @@ python3 -c "import osqp; import stable_baselines3; import rlqp"
 * **RLQP 策略训练**：镜像默认仅安装 RLQP 框架，用户需自行在容器中运行训练脚本并保存模型[^5]。
 * **图形加速**：如果宿主机使用 NVIDIA GPU，可通过 `--gpus all` 参数启用 GPU 加速；使用 CuOSQP 需要额外安装 CUDA 工具链。
 * **安全性**：容器以 root 权限运行，如需限制权限，可在 Dockerfile 中创建普通用户并切换运行身份。
+* 如需进一步定制（例如添加 PX4 仿真、MoveIt2 等），可在 Dockerfile 中添加对应安装步骤。
 
-## 6. 无法在当前环境直接构建镜像的说明
+## 6. 常用的 Git 命令
+```bash
+# 1. 拉取(克隆)远程仓库到本地
+git clone https://github.com/你的用户名/仓库名.git
 
-当前对话环境无法安装 Docker 或 Podman，因此无法直接执行 `docker build` 创建实际镜像。然而，提供的 Dockerfile 已包含所有必要的配置步骤，用户可以将其复制到本地开发机器上按照上述方法构建镜像。如需进一步定制（例如添加 PX4 仿真、MoveIt2 等），可在 Dockerfile 中添加对应安装步骤。
+# 2. 进入仓库目录
+cd 仓库名
+
+# 3. 更新远程主分支（拉取远端最新提交并合并到本地当前分支）
+git pull origin main
+# 如果主分支叫 master，则：
+# git pull origin master
+
+# 4. 查看所有远程分支
+git fetch
+git branch -a
+
+# 5. 切换到已有分支
+git checkout 分支名
+
+# 6. 新建并切换到一个新分支
+git checkout -b 新分支名
+
+# （在新分支上开发、修改文件后）将改动添加到暂存区
+git add .
+
+# 提交改动
+git commit -m "简要的提交说明"
+
+# 7. 将本地分支推送到远程仓库
+git push origin 分支名
+
+# 如果是第一次推送新分支，可能需要设置上游分支：
+git push -u origin 新分支名
+```
+**说明：**
+
+* `clone`：将远程仓库完整复制到本地。
+* `pull`：从远程拉取最新改动并自动合并。
+* `fetch` + `branch -a`：仅拉取远程引用，不合并，用于查看远程有哪些分支。
+* `checkout`：切换分支；加 `-b` 参数可以同时创建并切换。
+* `add` + `commit`：将本地改动提交到本地仓库。
+* `push`：将本地分支和提交推送到远程 GitHub。
 
 ---
 
