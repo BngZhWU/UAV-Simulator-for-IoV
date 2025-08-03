@@ -1,49 +1,50 @@
-# UAV-Simulator-for-IoV Docker 镜像配置文档
+# UAV-Simulator-for-IoV Docker Image Configuration Guide
 
-本文档说明如何在 **Ubuntu Noble 24.04** 环境构建一份包含 ROS 2 Jazzy Jalisco、Gazebo Harmonic、OSQP、RLQP、OMPL、Fast-Planner 和 Stable Baselines3 的容器镜像，以支持多无人机 IoV 仿真与强化学习调参研究。
+This document describes how to build a container image on **Ubuntu Noble 24.04** that includes ROS 2 Jazzy Jalisco, Gazebo Harmonic, OSQP, RLQP, OMPL, Fast-Planner, and Stable Baselines3, supporting multi-UAV IoV simulation and reinforcement learning parameter tuning research.
 
-本配置方案已在window环境中测试并可以使用。
+> **Note:** This configuration has been tested and works on a Windows environment.
 
-## 1. 构建镜像前的准备
+## 1. Prerequisites
 
-* **安装 Docker/Podman**：在宿主机上需预先安装 [Docker Engine](https://docs.docker.com/engine/install/) 或 Podman，并确保当前用户具有构建权限。
-* **获取 Dockerfile**：本仓库内包含 `UAV_Simulator_Dockerfile` 和 `entrypoint.sh`，构建镜像前请确保两个文件位于同一目录。
+* **Install Docker/Podman**: Make sure [Docker Engine](https://docs.docker.com/engine/install/) or Podman is installed on the host machine and that your user has permission to build images.
+* **Obtain the Dockerfile**: The repository contains `UAV_Simulator_Dockerfile` and `entrypoint.sh`. Confirm both files are in the same directory before building.
+
   ```bash
   git clone https://github.com/BngZhWU/UAV-Simulator-for-IoV.git
   cd UAV-Simulator-for-IoV
   ```
 
-## 2. Dockerfile 说明
+## 2. Dockerfile Overview
 
-`UAV_Simulator_Dockerfile` 以 `ubuntu:24.04` 为基础镜像，主要步骤如下：
+The `UAV_Simulator_Dockerfile` uses `ubuntu:24.04` as its base image and performs the following steps:
 
-1. 设置系统区域和时区，安装基础开发工具。
-2. 添加 ROS 2 Jazzy 及 Gazebo 的 apt 源，并安装 `ros-jazzy-desktop`、`gz-sim7`（Gazebo Harmonic）等包。
-3. 安装 OMPL (`ros-jazzy-ompl`) 以及 Fast-Planner 所需的依赖库（Eigen3、PCL、OpenMP、Boost）。
-4. 通过 pip 安装 `osqp`[^1] 和 `stable-baselines3`[^2]。
-5. 克隆 RLQP 仓库并以开发模式安装，RLQP 用于对 ADMM 罚参数进行强化学习调参[^3]。
-6. 克隆 Fast-Planner 源码到 `/fast_planner_ws/src/Fast-Planner` 并利用 `colcon` 编译，Fast-Planner 提供四旋翼轨迹搜索与 B 样条优化[^4]。
-7. 最后复制 `entrypoint.sh` 脚本，该脚本用于在容器启动时自动加载 ROS 2 及 Fast-Planner 的环境。
+1. Configure system locale and timezone, and install essential development tools.
+2. Add the ROS 2 Jazzy and Gazebo repositories, then install `ros-jazzy-desktop` and `gz-sim7` (Gazebo Harmonic).
+3. Install OMPL (`ros-jazzy-ompl`) and dependencies for Fast-Planner (Eigen3, PCL, OpenMP, Boost).
+4. Use pip to install `osqp`[^1] and `stable-baselines3`[^2].
+5. Clone the RLQP repository and install it in development mode; RLQP is used for reinforcement learning–based tuning of ADMM penalty parameters[^3].
+6. Clone the Fast-Planner source into `/fast_planner_ws/src/Fast-Planner` and build with `colcon`; Fast-Planner provides quadrotor trajectory search and B-spline optimization[^4].
+7. Copy the `entrypoint.sh` script to auto-source ROS 2 and Fast-Planner environments on container startup.
 
-## 3. 构建镜像
+## 3. Building the Image
 
-在含有 Dockerfile 的目录下执行以下命令即可构建镜像（确保在你的设备上先运行 Docker Desktop）：
+In the directory containing the Dockerfile, run:
 
 ```bash
 docker build -f UAV_Simulator_Dockerfile -t uav-iov-sim:latest .
 ```
 
-> **提示**：构建过程需要下载 ROS、Gazebo、Fast-Planner 等依赖，请保持网络通畅。
+> **Tip:** The build will download large dependencies (ROS, Gazebo, Fast-Planner). Ensure a stable internet connection.
 
-构建成功后，可以通过以下命令查看镜像：
+After a successful build, verify the image with:
 
 ```bash
 docker images | grep uav-iov-sim
 ```
 
-## 4. 运行容器
+## 4. Running the Container
 
-运行容器时需要挂载 X11 或使用 `gzclient` 实现图形界面，以下示例以交互模式启动容器并允许使用 Gazebo 图形界面：
+To run with graphical support (X11 or `gzclient`), start the container in interactive mode:
 
 ```bash
 docker run --rm -it \
@@ -54,84 +55,84 @@ docker run --rm -it \
   uav-iov-sim:latest
 ```
 
-* 如需挂载仿真场景或源码，可通过 `-v` 参数挂载宿主机路径到容器。例如将 OSM 转换生成的 Gazebo 世界文件挂载到 `/home/ros2_ws/src/worlds`。
+* To mount simulation worlds or source code, add `-v` flags. For example, mount OSM-generated Gazebo world files to `/home/ros2_ws/src/worlds`.
 
-进入容器后可执行以下命令验证环境：
+Inside the container, verify the environment:
 
 ```bash
-# 启动 Gazebo Harmonic
+# Launch Gazebo Harmonic
 gz sim
 
-# 初始化 ROS 工作空间
+# Initialize ROS workspace
 source /opt/ros/jazzy/setup.bash
 ros2 run demo_nodes_cpp talker
 
-# 检查 Fast-Planner 库和 OSQP
-tools:
+# Check Fast-Planner and OSQP
 ros2 pkg list | grep fast_planner
 python3 -c "import osqp; import stable_baselines3; import rlqp"
 ```
 
-## 5. 注意事项
+## 5. Notes and Considerations
 
-* **Gazebo 与 ROS 2 版本**：Dockerfile 中安装的 `gz-sim7` 与 Jazzy 对应的版本为 Gazebo Harmonic，若未来版本更新，请调整包名称。
-* **RLQP 策略训练**：镜像默认仅安装 RLQP 框架，用户需自行在容器中运行训练脚本并保存模型[^5]。
-* **图形加速**：如果宿主机使用 NVIDIA GPU，可通过 `--gpus all` 参数启用 GPU 加速；使用 CuOSQP 需要额外安装 CUDA 工具链。
-* **安全性**：容器以 root 权限运行，如需限制权限，可在 Dockerfile 中创建普通用户并切换运行身份。
-* 如需进一步定制（例如添加 PX4 仿真、MoveIt2 等），可在 Dockerfile 中添加对应安装步骤。
+* **ROS 2 and Gazebo Versions**: The installed `gz-sim7` corresponds to Gazebo Harmonic for ROS 2 Jazzy. Update package names if versions change.
+* **RLQP Training**: The image installs the RLQP framework only; run training scripts inside the container and save models as needed[^5].
+* **GPU Acceleration**: For NVIDIA GPUs, add `--gpus all` and install CUDA toolkits for CuOSQP.
+* **Security**: The container runs as root by default. To restrict permissions, create a non-root user in the Dockerfile and switch to it.
+* **Customization**: To add PX4 simulation, MoveIt2, or other tools, extend the Dockerfile with the required installation steps.
 
-## 6. 常用的 Git 命令
+## 6. Common Git Commands
+
 ```bash
-# 1. 拉取(克隆)远程仓库到本地
-git clone https://github.com/你的用户名/仓库名.git
+# 1. Clone a remote repository
+git clone https://github.com/<username>/<repository>.git
 
-# 2. 进入仓库目录
-cd 仓库名
+# 2. Enter the repository directory
+cd <repository>
 
-# 3. 更新远程主分支（拉取远端最新提交并合并到本地当前分支）
-git pull origin main
-# 如果主分支叫 master，则：
-# git pull origin master
+# 3. Pull updates from the main branch
+git pull origin main  # or 'master' if your default branch is named 'master'
 
-# 4. 查看所有远程分支
+# 4. Fetch and list all remote branches
 git fetch
 git branch -a
 
-# 5. 切换到已有分支
-git checkout 分支名
+# 5. Switch to an existing branch
+git checkout <branch-name>
 
-# 6. 新建并切换到一个新分支
-git checkout -b 新分支名
+# 6. Create and switch to a new branch
+git checkout -b <new-branch-name>
 
-# （在新分支上开发、修改文件后）将改动添加到暂存区
+# After making changes:
+# Stage all changes
 git add .
 
-# 提交改动
-git commit -m "简要的提交说明"
+# Commit with a message
+git commit -m "Brief description of changes"
 
-# 7. 将本地分支推送到远程仓库
-git push origin 分支名
+# 7. Push local branch to GitHub
+git push origin <branch-name>
 
-# 如果是第一次推送新分支，可能需要设置上游分支：
-git push -u origin 新分支名
+# For first-time pushes of new branches:
+git push -u origin <new-branch-name>
 ```
-**说明：**
 
-* `clone`：将远程仓库完整复制到本地。
-* `pull`：从远程拉取最新改动并自动合并。
-* `fetch` + `branch -a`：仅拉取远程引用，不合并，用于查看远程有哪些分支。
-* `checkout`：切换分支；加 `-b` 参数可以同时创建并切换。
-* `add` + `commit`：将本地改动提交到本地仓库。
-* `push`：将本地分支和提交推送到远程 GitHub。
+**Notes:**
+
+* `clone`: Copies the entire remote repository locally.
+* `pull`: Fetches and merges changes from the remote.
+* `fetch` + `branch -a`: Updates remote refs without merging; lists all branches.
+* `checkout`: Switches branches; `-b` creates and switches.
+* `add` + `commit`: Stages and commits changes locally.
+* `push`: Uploads commits to the remote repository.
 
 ---
 
-[^1]: [OSQP 官方网站](https://osqp.org/)
+[^1]: [OSQP Official Website](https://osqp.org/)
 
-[^2]: [Stable Baselines3 文档](https://stable-baselines3.readthedocs.io/en/master/)
+[^2]: [Stable Baselines3 Documentation](https://stable-baselines3.readthedocs.io/en/master/)
 
 [^3]: [RLQP README](https://raw.githubusercontent.com/BerkeleyAutomation/rlqp/master/README.md)
 
 [^4]: [Fast-Planner README](https://raw.githubusercontent.com/HKUST-Aerial-Robotics/Fast-Planner/master/README.md)
 
-[^5]: RLQP 策略训练脚本说明
+[^5]: Instructions for RLQP strategy training scripts
