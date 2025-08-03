@@ -25,13 +25,13 @@
 
 ## 3. 构建镜像
 
-在含有 Dockerfile 的目录下执行以下命令即可构建镜像（假设 Dockerfile 名为 `UAV_Simulator_Dockerfile`）：
+在含有 Dockerfile 的目录下执行以下命令即可构建镜像（确保在你的设备上先运行 Docker Desktop）：
 
 ```bash
 docker build -f UAV_Simulator_Dockerfile -t uav-iov-sim:latest .
 ```
 
-> **提示**：构建过程需要下载 ROS、Gazebo、Fast-Planner 等较大的依赖，请保持网络通畅。
+> **提示**：构建过程需要下载 ROS、Gazebo、Fast-Planner 等依赖，请保持网络通畅。
 
 构建成功后，可以通过以下命令查看镜像：
 
