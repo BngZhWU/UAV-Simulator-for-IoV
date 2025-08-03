@@ -2,6 +2,8 @@
 
 本文档说明如何在 **Ubuntu Noble 24.04** 环境构建一份包含 ROS 2 Jazzy Jalisco、Gazebo Harmonic、OSQP、RLQP、OMPL、Fast-Planner 和 Stable Baselines3 的容器镜像，以支持多无人机 IoV 仿真与强化学习调参研究。
 
+本配置方案已在window环境中测试并可以使用。
+
 ## 1. 构建镜像前的准备
 
 * **安装 Docker/Podman**：在宿主机上需预先安装 [Docker Engine](https://docs.docker.com/engine/install/) 或 Podman，并确保当前用户具有构建权限。
