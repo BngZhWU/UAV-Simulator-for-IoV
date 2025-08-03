@@ -4,8 +4,12 @@
 
 ## 1. 构建镜像前的准备
 
-* **安装 Docker/Podman**：在宿主机上需预先安装 Docker Engine 或 Podman，并确保当前用户具有构建权限。
+* **安装 Docker/Podman**：在宿主机上需预先安装 [Docker Engine](https://docs.docker.com/engine/install/) 或 Podman，并确保当前用户具有构建权限。
 * **获取 Dockerfile**：本仓库内包含 `UAV_Simulator_Dockerfile` 和 `entrypoint.sh`，构建镜像前请确保两个文件位于同一目录。
+  ```bash
+  git clone https://github.com/<your_github_username>/UAV-Simulator-for-IoV.git
+  cd UAV-Simulator-for-IoV
+  ```
 
 ## 2. Dockerfile 说明
 
