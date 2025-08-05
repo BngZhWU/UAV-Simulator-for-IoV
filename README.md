@@ -1,32 +1,37 @@
-# UAV Simulator for IoV — CUDA/cuDNN + ROS 2 Jazzy + Gazebo Harmonic
-This document describes how to build a container image on **Ubuntu Noble 24.04** that includes ROS 2 Jazzy Jalisco, Gazebo Harmonic, OSQP, RLQP, OMPL, Fast-Planner, and Stable Baselines3, supporting multi-UAV IoV simulation and reinforcement learning parameter tuning research with CUDA/CuDNN support.
+# UAV Simulator for IoV — CUDA/cuDNN + ROS 2 Jazzy + Gazebo Harmonic + Aerostack2
+
+This document explains how to build and run a container image on **Ubuntu 24.04 (Noble)** for multi‑UAV IoV research.  The image includes **ROS 2 Jazzy Jalisco**, **Gazebo Harmonic**, **Aerostack2** (built from source), **OSQP**, **Stable‑Baselines3**, and the **RLQP** Python package, all accelerated by CUDA/cuDNN.  With these components you can simulate fleets of UAVs in realistic 3D city environments, run quadratic programming based path planners accelerated by RLQP, and prototype learning‑based trajectory optimisation.
 
 > **Note:** This configuration has been tested and works on a Windows environment.
-## 1. Prerequisites
 
-* **Install Docker/Podman**: Make sure [Docker Engine](https://docs.docker.com/engine/install/) or Podman is installed on the host machine and that your user has permission to build images.
-* **Obtain the Dockerfile**: The repository contains `UAV_Simulator_Dockerfile` and `entrypoint.sh`. Confirm both files are in the same directory before building.
+## 1 Prerequisites
 
-```bash
-git clone https://github.com/BngZhWU/UAV-Simulator-for-IoV.git
+- **Install Docker/Podman** – Make sure [Docker Engine](https://docs.docker.com/engine/install/) or Podman is installed and that your user can run `docker build` and `docker run`.
+- **Get the build files** – This repository contains `UAV_Simulator_Dockerfile` and `entrypoint.sh`. Both must be present in the root directory before building.
+
+```
+bash git clone https://github.com/BngZhWU/UAV-Simulator-for-IoV.git
 cd UAV-Simulator-for-IoV
 ```
 
-## 2. Build
+## 2 Build
 
-```bash
+Build the image using the provided Dockerfile (replace the base tag if your host requires a different CUDA version):
+
+```
+bash
 docker build -f UAV_Simulator_Dockerfile -t uav-iov-sim:cuda .
 ```
 
-> The Dockerfile uses `nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04`.
-> Replace the tag if your host driver requires a different CUDA version.
+The build will take some time because it installs ROS 2, Gazebo Harmonic, compiles Aerostack2 from source and creates a Python virtual environment with OSQP, Stable‑Baselines3 and RLQP.
 
-## 3. Run (GPU + X11)
+## 3 Run (GPU + X11)
 
 ### Linux/X11
 
-```bash
-xhost +local:root   # Allow local X clients
+```
+bash # Allow local X clients to connect
+xhost +local:root
 
 docker run --rm -it \
   --gpus all \
@@ -34,61 +39,73 @@ docker run --rm -it \
   -e NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics \
   -e DISPLAY=$DISPLAY \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
-  -v $HOME/.Xauthority:/home/ros/.XAuthority:ro \
   --name uav_iov_sim \
   uav-iov-sim:cuda bash
 ```
 
-Inside the container:
+Once inside the container, you can verify that CUDA, Gazebo and ROS 2 are available:
 
-```bash
-nvidia-smi           # GPU listed
-gz --version         # Gazebo Harmonic
-ros2 --version       # ROS 2 Jazzy
-gz sim               # Launch Gazebo GUI
+```
+bash nvidia-smi          # lists GPUs
+ros2 --version      # prints ROS 2 Jazzy version
+gz --version        # prints Gazebo Harmonic version
+gz sim              # launch the Gazebo GUI
 ```
 
-### Wayland Tips
+On Wayland desktops you may need to run under an XWayland session or set `export GDK_BACKEND=x11` before starting Gazebo.
 
-If you use Wayland, start an XWayland session or set:
+## 4 Typical Workflow
 
-```bash
-export GDK_BACKEND=x11
+After starting a container shell, prepare the environment:
+
 ```
-
-## 4. Typical Workflow
-
-```bash
+bash # Source ROS 2 and Aerostack2 overlays
 source /opt/ros/jazzy/setup.bash
-source /fast_planner_ws/install/setup.bash
+source /aerostack2_ws/install/setup.bash
 
-ros2 run demo_nodes_cpp talker
+# (Optional) initialise your own planning workspace
+# source /planning_ws/install/setup.bash
+
+# Launch a simple Aerostack2 simulation or run your own nodes
+ros2 launch as2_gazebo_worlds gazebo_single_multirotor.launch.py
+
+# Or open a Python shell and import OSQP/RLQP
+python -c "import osqp, rlqp"
 ```
 
-## 5. Image Contents
+## 5 Image Contents
 
-* CUDA 12.x + cuDNN development libraries
-* ROS 2 Jazzy desktop + OMPL
-* Gazebo Harmonic (`gz-harmonic`)
-* Fast‑Planner built with `colcon`
-* RLQP installed in editable mode
-* Python packages: OSQP, Stable-Baselines3 (+ extra)
+The resulting image contains the following key components:
 
-## 6. Notes & Rationale
+- **CUDA 12.x and cuDNN** – GPU acceleration for neural network training and inference.
+- **ROS 2 Jazzy desktop and OMPL** – Core ROS 2 libraries, developer tools and sampling‑based planning library.
+- **Gazebo Harmonic** – Latest stable Gazebo simulator for ROS 2.
+- **Aerostack2** – Full aerial robotics framework providing motion behaviours, path planning and trajectory generation, compiled from source into `/aerostack2_ws`.
+- **Python virtual environment** – Located at `/opt/venv`, containing OSQP, Stable‑Baselines3 and the RLQP Python package.
 
-* **ros2-apt-source** is the recommended way to install ROS 2 on Ubuntu 24.04 (Noble).
-* **gz-harmonic** metapackage ensures a consistent Gazebo Harmonic install.
-* Using NVIDIA's `cudnn-devel` base image exposes CUDA/cuDNN without manual install.
+## 6 Notes & Rationale
 
-## 7. Troubleshooting
+- **ros2‑apt‑source** is the recommended way to install ROS 2 on Ubuntu 24.04 and automatically configures GPG keys and package lists.
+- **gz‑harmonic** metapackage ensures a consistent installation of Gazebo Harmonic and its dependencies.
+- Building **Aerostack2** from source allows us to stay close to upstream developments and use the latest behaviours for path planning and trajectory generation.
+- Installing OSQP and RLQP inside a virtual environment avoids conflicts with the system Python (PEP 668) and isolates dependencies for reinforcement learning.
 
-| Issue                   | Fix                                                                                       |
-| ----------------------- | ----------------------------------------------------------------------------------------- |
-| `nvidia-smi` not found  | Run container with `--gpus all` and ensure NVIDIA Container Toolkit is installed on host. |
-| Gazebo GUI doesn’t open | Allow X11 (`xhost +local:root`), mount `/tmp/.X11-unix`, and verify `$DISPLAY`.           |
-| Driver/CUDA mismatch    | Use a base image tag matching your host driver.                                           |
+## 7 Troubleshooting
 
-## 8. Common Git Commands
+| Issue                      | Fix                                                          |
+| -------------------------- | ------------------------------------------------------------ |
+| `nvidia-smi` not found     | Run the container with `--gpus all` and install the NVIDIA Container Toolkit on the host. |
+| Gazebo GUI doesn't open    | Run `xhost +local:root`, mount `/tmp/.X11-unix` into the container and ensure `$DISPLAY` is set. |
+| Base image/driver mismatch | Choose a CUDA base image tag that matches your host GPU driver. |
+| ROS commands not found     | Make sure you sourced `/opt/ros/jazzy/setup.bash` before running ROS 2 commands. |
+
+
+
+## 8 Acknowledgements
+
+This environment combines the open‑source frameworks **ROS 2 Jazzy**, **Gazebo Harmonic**, **Aerostack2**, **OSQP**, **Stable‑Baselines3** and **RLQP**.  We thank the respective communities for their work.
+
+## Common Git Commands
 
 ```bash
 # 1. Clone a remote repository
