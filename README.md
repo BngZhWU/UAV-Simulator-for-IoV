@@ -1,6 +1,6 @@
 # UAV Simulator for IoV — Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic + Aerostack2 + CUDA/cuDNN
 
-This document explains how to build and run a container image on **Ubuntu 24.04 (Noble)** for multi‑UAV IoV research.  The image includes **ROS 2 Jazzy Jalisco**, **Gazebo Harmonic**, **Aerostack2** (built from source), **OSQP**[^1], **Stable‑Baselines3**, and the **RLQP** Python package, all accelerated by CUDA/cuDNN.  With these components you can simulate fleets of UAVs in realistic 3D city environments, run quadratic programming based path planners accelerated by RLQP, and prototype learning‑based trajectory optimisation.
+This document explains how to build and run a container image on **Ubuntu 24.04 (Noble)** for multi‑UAV IoV research.  The image includes **ROS 2 Jazzy Jalisco**, **Gazebo Harmonic**, **Aerostack2**[^4] (built from source), **OSQP**[^1], **Stable‑Baselines3**[^2], and the **RLQP**[^3] Python package, all accelerated by CUDA/cuDNN.  With these components you can simulate fleets of UAVs in realistic 3D city environments, run quadratic programming based path planners accelerated by RLQP[^5], and prototype learning‑based trajectory optimisation.
 
 > **Note:** This configuration has been tested and works on a Windows environment.
 
@@ -158,6 +158,6 @@ git push -u origin <new-branch-name>
 
 [^3]: [RLQP README](https://raw.githubusercontent.com/BerkeleyAutomation/rlqp/master/README.md)
 
-[^4]: [Fast-Planner README](https://raw.githubusercontent.com/HKUST-Aerial-Robotics/Fast-Planner/master/README.md)
+[^4]: [Aerostack2 README](https://github.com/aerostack2/aerostack2/blob/main/README.md)
 
-[^5]: Instructions for RLQP strategy training scripts
+[^5]: [Instructions for RLQP strategy training scripts](https://github.com/berkeleyautomation/rlqp)
