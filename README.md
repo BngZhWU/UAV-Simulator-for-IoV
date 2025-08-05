@@ -1,86 +1,92 @@
-# UAV-Simulator-for-IoV Docker Image Configuration Guide
-
-This document describes how to build a container image on **Ubuntu Noble 24.04** that includes ROS 2 Jazzy Jalisco, Gazebo Harmonic, OSQP, RLQP, OMPL, Fast-Planner, and Stable Baselines3, supporting multi-UAV IoV simulation and reinforcement learning parameter tuning research.
-
-> **Note:** This configuration has been tested and works on a Windows environment.
+# UAV Simulator for IoV — CUDA/cuDNN + ROS 2 Jazzy + Gazebo Harmonic
 
 ## 1. Prerequisites
 
 * **Install Docker/Podman**: Make sure [Docker Engine](https://docs.docker.com/engine/install/) or Podman is installed on the host machine and that your user has permission to build images.
 * **Obtain the Dockerfile**: The repository contains `UAV_Simulator_Dockerfile` and `entrypoint.sh`. Confirm both files are in the same directory before building.
 
-  ```bash
-  git clone https://github.com/BngZhWU/UAV-Simulator-for-IoV.git
-  cd UAV-Simulator-for-IoV
-  ```
-
-## 2. Dockerfile Overview
-
-The `UAV_Simulator_Dockerfile` uses `ubuntu:24.04` as its base image and performs the following steps:
-
-1. Configure system locale and timezone, and install essential development tools.
-2. Add the ROS 2 Jazzy and Gazebo repositories, then install `ros-jazzy-desktop` and `gz-sim7` (Gazebo Harmonic).
-3. Install OMPL (`ros-jazzy-ompl`) and dependencies for Fast-Planner (Eigen3, PCL, OpenMP, Boost).
-4. Use pip to install `osqp`[^1] and `stable-baselines3`[^2].
-5. Clone the RLQP repository and install it in development mode; RLQP is used for reinforcement learning–based tuning of ADMM penalty parameters[^3].
-6. Clone the Fast-Planner source into `/fast_planner_ws/src/Fast-Planner` and build with `colcon`; Fast-Planner provides quadrotor trajectory search and B-spline optimization[^4].
-7. Copy the `entrypoint.sh` script to auto-source ROS 2 and Fast-Planner environments on container startup.
-
-## 3. Building the Image
-
-In the directory containing the Dockerfile, run:
-
 ```bash
-docker build -f UAV_Simulator_Dockerfile -t uav-iov-sim:latest .
+git clone https://github.com/BngZhWU/UAV-Simulator-for-IoV.git
+cd UAV-Simulator-for-IoV
 ```
 
-> **Tip:** The build will download large dependencies (ROS, Gazebo, Fast-Planner). Ensure a stable internet connection.
-
-After a successful build, verify the image with:
+## 2. Build
 
 ```bash
-docker images | grep uav-iov-sim
+docker build -f UAV_Simulator_Dockerfile -t uav-iov-sim:cuda .
 ```
 
-## 4. Running the Container
+> The Dockerfile uses `nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04`.
+> Replace the tag if your host driver requires a different CUDA version.
 
-To run with graphical support (X11 or `gzclient`), start the container in interactive mode:
+## 3. Run (GPU + X11)
+
+### Linux/X11
 
 ```bash
+xhost +local:root   # Allow local X clients
+
 docker run --rm -it \
-  --env DISPLAY=$DISPLAY \
-  --env QT_X11_NO_MITSHM=1 \
-  --volume /tmp/.X11-unix:/tmp/.X11-unix:rw \
-  --privileged \
-  uav-iov-sim:latest
+  --gpus all \
+  -e NVIDIA_VISIBLE_DEVICES=all \
+  -e NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics \
+  -e DISPLAY=$DISPLAY \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+  -v $HOME/.Xauthority:/home/ros/.XAuthority:ro \
+  --name uav_iov_sim \
+  uav-iov-sim:cuda bash
 ```
 
-* To mount simulation worlds or source code, add `-v` flags. For example, mount OSM-generated Gazebo world files to `/home/ros2_ws/src/worlds`.
-
-Inside the container, verify the environment:
+Inside the container:
 
 ```bash
-# Launch Gazebo Harmonic
-gz sim
-
-# Initialize ROS workspace
-source /opt/ros/jazzy/setup.bash
-ros2 run demo_nodes_cpp talker
-
-# Check Fast-Planner and OSQP
-ros2 pkg list | grep fast_planner
-python3 -c "import osqp; import stable_baselines3; import rlqp"
+nvidia-smi           # GPU listed
+gz --version         # Gazebo Harmonic
+ros2 --version       # ROS 2 Jazzy
+gz sim               # Launch Gazebo GUI
 ```
 
-## 5. Notes and Considerations
+### Wayland Tips
 
-* **ROS 2 and Gazebo Versions**: The installed `gz-sim7` corresponds to Gazebo Harmonic for ROS 2 Jazzy. Update package names if versions change.
-* **RLQP Training**: The image installs the RLQP framework only; run training scripts inside the container and save models as needed[^5].
-* **GPU Acceleration**: For NVIDIA GPUs, add `--gpus all` and install CUDA toolkits for CuOSQP.
-* **Security**: The container runs as root by default. To restrict permissions, create a non-root user in the Dockerfile and switch to it.
-* **Customization**: To add PX4 simulation, MoveIt2, or other tools, extend the Dockerfile with the required installation steps.
+If you use Wayland, start an XWayland session or set:
 
-## 6. Common Git Commands
+```bash
+export GDK_BACKEND=x11
+```
+
+## 4. Typical Workflow
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source /fast_planner_ws/install/setup.bash
+
+ros2 run demo_nodes_cpp talker
+```
+
+## 5. Image Contents
+
+* CUDA 12.x + cuDNN development libraries
+* ROS 2 Jazzy desktop + OMPL
+* Gazebo Harmonic (`gz-harmonic`)
+* Fast‑Planner built with `colcon`
+* RLQP installed in editable mode
+* Python packages: OSQP, Stable-Baselines3 (+ extra)
+
+## 6. Notes & Rationale
+
+* **ros2-apt-source** is the recommended way to install ROS 2 on Ubuntu 24.04 (Noble).
+* **gz-harmonic** metapackage ensures a consistent Gazebo Harmonic install.
+* Using NVIDIA's `cudnn-devel` base image exposes CUDA/cuDNN without manual install.
+
+## 7. Troubleshooting
+
+| Issue                   | Fix                                                                                       |
+| ----------------------- | ----------------------------------------------------------------------------------------- |
+| `nvidia-smi` not found  | Run container with `--gpus all` and ensure NVIDIA Container Toolkit is installed on host. |
+| Gazebo GUI doesn’t open | Allow X11 (`xhost +local:root`), mount `/tmp/.X11-unix`, and verify `$DISPLAY`.           |
+| Driver/CUDA mismatch    | Use a base image tag matching your host driver.                                           |
+
+## 8. Common Git Commands
 
 ```bash
 # 1. Clone a remote repository

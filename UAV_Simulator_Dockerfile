@@ -1,77 +1,160 @@
-# Base image: Ubuntu Noble 24.04
-FROM ubuntu:24.04
+# syntax=docker/dockerfile:1
 
-# Prevent interactive tzdata prompt and set noninteractive frontend
-ENV DEBIAN_FRONTEND=noninteractive
+###############################################################################
+# Builder stage: CUDA + cuDNN + ROS 2 Jazzy + Gazebo Harmonic + deps build
+###############################################################################
+# Pick a CUDA/cuDNN image that matches your host driver.
+# Example tags (Ubuntu 24.04 with cuDNN preinstalled) include:
+#   nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+# You may switch to another cudnn-devel-ubuntu24.04 tag if needed.
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04 AS builder
 
-# Install core utilities and create a non-root user (optional)
-RUN apt-get update && apt-get install -y \
-    locales \
-    tzdata \
-    sudo \
-    gnupg2 \
-    curl \
-    lsb-release \
-    software-properties-common && \
-    locale-gen en_US en_US.UTF-8 && \
-    update-locale LANG=en_US.UTF-8
+ARG DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC \
+    LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8 \
+    ROS_DISTRO=jazzy
 
-ENV LANG en_US.UTF-8
-ENV LANGUAGE en_US:en
-ENV LC_ALL en_US.UTF-8
-
-# -----------------------------------------------------------------------------
-# Configure ROS 2 Jazzy Jalisco repository and Gazebo Harmonic (gz-sim)
-# -----------------------------------------------------------------------------
-RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.asc | apt-key add - && \
-    echo "deb [arch=amd64 signed-by=/etc/apt/trusted.gpg] http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" \
-    > /etc/apt/sources.list.d/ros2.list
-
-# Gazebo (Ignition) repository
-RUN echo "deb [arch=amd64] http://packages.osrfoundation.org/gazebo/ubuntu $(lsb_release -cs) main" \
-    > /etc/apt/sources.list.d/gazebo-stable.list && \
-    curl -sSL http://packages.osrfoundation.org/gazebo.key | apt-key add -
-
+# Base tools & build deps (minimal)
 RUN apt-get update && \
-    apt-get install -y \
-    ros-jazzy-desktop \
-    python3-colcon-common-extensions \
-    python3-argcomplete \
-    python3-dev \
-    python3-pip \
-    git \
-    build-essential \
-    wget \
-    unzip \
-    nano \
-    # Gazebo Harmonic (gz-sim) and ROS2 bridge
-    gz-sim7 \
-    ros-jazzy-gz-ros2-control \
-    # OMPL and dependencies
-    ros-jazzy-ompl \
-    # Fast-Planner dependencies
-    libeigen3-dev libomp-dev libpcl-dev libboost-all-dev && \
+    apt-get install -y --no-install-recommends \
+        tzdata locales ca-certificates curl gnupg lsb-release \
+        build-essential git wget cmake python3 python3-pip python3-venv \
+        python3-setuptools python3-dev \
+        libeigen3-dev libboost-all-dev libpcl-dev liboctomap-dev libomp-dev \
+        # GUI / GL helpers often needed by Gazebo clients
+        mesa-utils libxext6 libx11-6 libxrender1 libxkbcommon-x11-0 \
+        x11-apps && \
+    ln -fs /usr/share/zoneinfo/$TZ /etc/localtime && \
+    dpkg-reconfigure --frontend noninteractive tzdata && \
+    locale-gen en_US.UTF-8 && \
     rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip and install Python packages
-RUN python3 -m pip install --upgrade pip && \
-    pip3 install osqp stable-baselines3[extra]
+# -------------------------------
+# ROS 2 Jazzy via ros2-apt-source
+# -------------------------------
+# Official instructions recommend installing ros2-apt-source to configure
+# repositories and keys automatically for Ubuntu 24.04 (Noble).
+# See: https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html
+RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+    export ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | grep -F "tag_name" | awk -F\" '{print $4}') && \
+    curl -L -o /tmp/ros2-apt-source.deb "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.$(. /etc/os-release && echo $VERSION_CODENAME)_all.deb" && \
+    dpkg -i /tmp/ros2-apt-source.deb && \
+    rm -f /tmp/ros2-apt-source.deb && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ros-jazzy-desktop ros-jazzy-ompl && \
+    rm -rf /var/lib/apt/lists/*
 
-# Clone and install RLQP (ADMM parameter tuning)
-RUN git clone --depth=1 https://github.com/berkeley-research/rlqp.git /opt/rlqp && \
-    pip3 install --no-cache-dir -e /opt/rlqp
+# -------------------------------
+# Gazebo Harmonic via OSRF repo
+# -------------------------------
+# Official instructions install the 'gz-harmonic' metapackage.
+# See: https://gazebosim.org/docs/harmonic/install_ubuntu/
+RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg lsb-release && \
+    curl -fsSL https://packages.osrfoundation.org/gazebo.gpg -o /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" > /etc/apt/sources.list.d/gazebo-stable.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends gz-harmonic && \
+    rm -rf /var/lib/apt/lists/*
 
-# Clone Fast-Planner source and build with colcon
+# -------------------------------
+# Python packages for planning / RL
+# -------------------------------
+RUN python3 -m pip install --no-cache-dir --upgrade pip && \
+    python3 -m pip install --no-cache-dir \
+        osqp stable-baselines3[extra]
+
+# -------------------------------
+# RLQP (editable install)
+# -------------------------------
+RUN git clone --depth 1 https://github.com/BerkeleyAutomation/rlqp.git /opt/rlqp && \
+    python3 -m pip install --no-cache-dir -e /opt/rlqp
+
+# -------------------------------
+# Fast-Planner build (colcon)
+# -------------------------------
 RUN mkdir -p /fast_planner_ws/src && \
-    git clone --depth=1 https://github.com/HKUST-Aerial-Robotics/Fast-Planner.git \
-    /fast_planner_ws/src/Fast-Planner && \
-    /bin/bash -c "source /opt/ros/jazzy/setup.bash && cd /fast_planner_ws && colcon build --symlink-install"
+    git clone --depth 1 https://github.com/HKUST-Aerial-Robotics/Fast-Planner.git /fast_planner_ws/src/Fast-Planner
 
-# Set up entrypoint for ROS2 sourcing
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# rosdep -> dependencies -> colcon build (Release; tests/examples OFF)
+RUN bash -lc "source /opt/ros/${ROS_DISTRO}/setup.bash && \
+    apt-get update && apt-get install -y --no-install-recommends python3-rosdep && \
+    rosdep init || true && rosdep update && \
+    cd /fast_planner_ws && \
+    rosdep install --from-paths src --ignore-src -r -y && \
+    colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF" && \
+    rm -rf /var/lib/apt/lists/*
 
-ENV ROS_DISTRO=jazzy
+###############################################################################
+# Runtime stage: slim image with needed runtime + built artifacts
+###############################################################################
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04 AS runtime
 
-ENTRYPOINT ["/entrypoint.sh"]
+ARG DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC \
+    LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8 \
+    ROS_DISTRO=jazzy \
+    # Helpful defaults for NVIDIA Container Toolkit
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+
+# Runtime tools (no build-essential)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        tzdata locales ca-certificates curl gnupg lsb-release \
+        python3 python3-pip \
+        # ROS 2 + GUI clients, Gazebo runtime
+        mesa-utils libxext6 libx11-6 libxrender1 libxkbcommon-x11-0 \
+        x11-apps && \
+    ln -fs /usr/share/zoneinfo/$TZ /etc/localtime && \
+    dpkg-reconfigure --frontend noninteractive tzdata && \
+    locale-gen en_US.UTF-8 && \
+    rm -rf /var/lib/apt/lists/*
+
+# ROS 2 repositories (via ros2-apt-source package)
+RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+    export ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | grep -F "tag_name" | awk -F\" '{print $4}') && \
+    curl -L -o /tmp/ros2-apt-source.deb "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.$(. /etc/os-release && echo $VERSION_CODENAME)_all.deb" && \
+    dpkg -i /tmp/ros2-apt-source.deb && rm -f /tmp/ros2-apt-source.deb && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends ros-jazzy-desktop ros-jazzy-ompl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Gazebo Harmonic runtime
+RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg lsb-release && \
+    curl -fsSL https://packages.osrfoundation.org/gazebo.gpg -o /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" > /etc/apt/sources.list.d/gazebo-stable.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends gz-harmonic && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy built artifacts and Python site-packages from builder
+COPY --from=builder /fast_planner_ws /fast_planner_ws
+COPY --from=builder /opt/rlqp /opt/rlqp
+COPY --from=builder /usr/local /usr/local
+COPY --from=builder /opt/ros /opt/ros
+
+# Python deps in runtime (keep lightweight; OSQP/SB3 already in /usr/local from builder)
+RUN python3 -m pip install --no-cache-dir --upgrade pip
+
+# Non-root user for dev
+ARG USER=ros
+ARG UID=1000
+RUN useradd -m -u ${UID} ${USER}
+USER ${USER}
+ENV HOME=/home/${USER}
+WORKDIR ${HOME}
+
+# Entrypoint
+COPY entrypoint.sh /ros_entrypoint.sh
+RUN sudo chown ${USER}:${USER} /ros_entrypoint.sh || true && \
+    chmod +x /ros_entrypoint.sh
+
+# Helpful env for ROS/Gazebo and Python
+ENV PYTHONPATH=/fast_planner_ws/install/lib/python3.11/site-packages:$PYTHONPATH \
+    ROS_DOMAIN_ID=0
+
+ENTRYPOINT ["/ros_entrypoint.sh"]
 CMD ["bash"]
