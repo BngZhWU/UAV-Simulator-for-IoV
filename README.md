@@ -1,5 +1,7 @@
 # UAV Simulator for IoV — CUDA/cuDNN + ROS 2 Jazzy + Gazebo Harmonic
+This document describes how to build a container image on **Ubuntu Noble 24.04** that includes ROS 2 Jazzy Jalisco, Gazebo Harmonic, OSQP, RLQP, OMPL, Fast-Planner, and Stable Baselines3, supporting multi-UAV IoV simulation and reinforcement learning parameter tuning research with CUDA/CuDNN support.
 
+> **Note:** This configuration has been tested and works on a Windows environment.
 ## 1. Prerequisites
 
 * **Install Docker/Podman**: Make sure [Docker Engine](https://docs.docker.com/engine/install/) or Podman is installed on the host machine and that your user has permission to build images.
