@@ -1,6 +1,6 @@
 # UAV Simulator for IoV — Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic + Aerostack2 + CUDA/cuDNN
 
-This document explains how to build and run a container image on **Ubuntu 24.04 (Noble)** for multi‑UAV IoV research.  The image includes **ROS 2 Jazzy Jalisco**, **Gazebo Harmonic**, **Aerostack2** (built from source), **OSQP**[1], **Stable‑Baselines3**, and the **RLQP** Python package, all accelerated by CUDA/cuDNN.  With these components you can simulate fleets of UAVs in realistic 3D city environments, run quadratic programming based path planners accelerated by RLQP, and prototype learning‑based trajectory optimisation.
+This document explains how to build and run a container image on **Ubuntu 24.04 (Noble)** for multi‑UAV IoV research.  The image includes **ROS 2 Jazzy Jalisco**, **Gazebo Harmonic**, **Aerostack2** (built from source), **OSQP**[^1], **Stable‑Baselines3**, and the **RLQP** Python package, all accelerated by CUDA/cuDNN.  With these components you can simulate fleets of UAVs in realistic 3D city environments, run quadratic programming based path planners accelerated by RLQP, and prototype learning‑based trajectory optimisation.
 
 > **Note:** This configuration has been tested and works on a Windows environment.
 
