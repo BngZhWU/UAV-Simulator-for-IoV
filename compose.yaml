@@ -1,0 +1,25 @@
+services:
+  uav:
+    image: uav-iov-sim:humble
+    container_name: uav_iov_sim
+
+    # Request all NVIDIA GPUs (Compose + NVIDIA Container Toolkit)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    environment:
+      - ROS_DOMAIN_ID=0
+      # - DISPLAY=${DISPLAY}               # UNCOMMENT only when running from Linux/WSL
+
+    # volumes:
+    #   - /tmp/.X11-unix:/tmp/.X11-unix:rw # UNCOMMENT only on Linux (X11)
+    # devices:
+    #   - /dev/bus/usb:/dev/bus/usb        # UNCOMMENT only on Linux/WSL (after usbipd attach)
+
+    tty: true
+    stdin_open: true
