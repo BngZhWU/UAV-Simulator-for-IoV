@@ -33,7 +33,29 @@ A GPU‑enabled, containerized environment for multi‑UAV research. It bundles 
 
 ---
 
-## 2. Build
+## 2. Get the image (two options)
+
+You can either **pull the prebuilt image from Docker Hub** or **build locally**.
+In all commands below, use the appropriate image name:
+
+* If you **pulled from Docker Hub**, use `benjiwu/uav-iov-sim:humble`.
+* If you **built locally**, use `uav-iov-sim:humble` (or your custom tag).
+
+### 2A. Pull the prebuilt image (recommended)
+
+```bash
+docker pull docker.io/benjiwu/uav-iov-sim:humble
+```
+
+If you use Docker Compose, make sure your `compose.yaml` points to that image:
+
+```yaml
+services:
+  uav:
+    image: benjiwu/uav-iov-sim:humble
+```
+
+### 2B. Build locally (custom)
 
 ```bash
 # from repo root
@@ -42,7 +64,7 @@ DOCKER_BUILDKIT=1 docker build \
   -t uav-iov-sim:humble .
 ```
 
-**Build arguments (optional):**
+**Optional build arguments:**
 
 ```bash
 --build-arg ROS_DISTRO=humble \
@@ -55,9 +77,7 @@ DOCKER_BUILDKIT=1 docker build \
 > * Slow networks: enable Docker BuildKit and avoid rebuilding from scratch; keep the APT/PIP caches.
 > * Memory pressure on WSL2: increase `.wslconfig` memory/swap; see Troubleshooting.
 
----
-
-## 3. Run (GPU + GUI + ROS)
+## 3. Run (GPU + GUI + ROS) (GPU + GUI + ROS)
 
 > You may **start manually with `docker run`** or simply use **Compose via `docker compose`**. Both ways are equivalent — Compose just keeps the same flags in a single `compose.yaml` for repeatability.
 
@@ -358,4 +378,4 @@ git config --global alias.lg "log --oneline --graph --decorate --all"
 ## 10. License & acknowledgements
 
 * ROS 2, ros\_gz, Aerostack2, librealsense, and other components are licensed by their respective owners.
-* This image integrates these open‑source projects for research and education.
+* This image integrates these open‑source projects for research and education. For commercial use, please check the license of these projects. 
