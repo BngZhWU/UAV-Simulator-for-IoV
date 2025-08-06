@@ -1,235 +1,244 @@
-# syntax=docker/dockerfile:1
-
-###############################################################################
-# UAV IoV Simulator Dockerfile
+# syntax=docker/dockerfile:1.4
 #
-# This image provides a complete environment for multi‑UAV IoV path planning
-# research on Ubuntu 24.04.  It includes CUDA/cuDNN for accelerated RL
-# training, ROS 2 Jazzy with Gazebo Harmonic for simulation, Aerostack2
-# (built from source) for modular motion behaviours, and a Python virtual
-# environment hosting OSQP, Stable‑Baselines3 and the RLQP Python package.
+# UAV IoV Simulator — ROS 2 Humble (Ubuntu 22.04) + Gazebo (ros_gz) + Aerostack2 + RLQP + CUDA
 #
-# The build is split into two stages.  The builder stage installs ROS 2
-# and Gazebo from official repositories, creates a venv for Python packages,
-# installs optimisation/learning libraries, and compiles Aerostack2 from
-# source.  The runtime stage brings only what is necessary for execution
-# along with the built workspace and venv.
-
-###############################################################################
-# Builder stage: CUDA + ROS 2 Jazzy + Gazebo Harmonic + Aerostack2 + RLQP
-###############################################################################
-FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04 AS builder
-
-# Avoid interactive prompts during apt operations
-ARG DEBIAN_FRONTEND=noninteractive
-
-# Environment variables for locale and ROS distribution
-ENV TZ=Etc/UTC \
-    LANG=en_US.UTF-8 \
-    LC_ALL=en_US.UTF-8 \
-    ROS_DISTRO=jazzy
-
-# -----------------------------------------------------------------------------
-# 1. Base system packages
+# Two-stage build:
+#   1) builder  : full toolchain to build ROS 2 + ros_gz + Aerostack2 and Python venv
+#   2) runtime  : slim runtime with ros-core + ros_gz bridge; copy venv and workspace
 #
-# We install basic development tools, Python and headers, and graphics libs
-# needed by Gazebo clients.  The packages installed here are common across
-# builder and runtime stages.  After installation we clean up apt caches.
-# -----------------------------------------------------------------------------
-RUN apt-get update && \
+# Cache policy:
+#   - Cache only /var/cache/apt (DEB archives). DO NOT cache /var/lib/apt (locks live there).
+#   - Different cache ids per stage: apt-cache-builder vs apt-cache-runtime.
+#   - sharing=locked to serialize writers to the same cache id (APT needs exclusive access).
+#   - Use a pip cache for Python wheels.
+#
+# BuildKit:
+#   PowerShell: $Env:DOCKER_BUILDKIT=1; docker build -f UAV_Simulator_Dockerfile -t uav-iov-sim:humble .
+#
+ARG ROS_DISTRO=humble
+ARG CUDA_IMAGE_DEVEL=nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+ARG CUDA_IMAGE_RUNTIME=nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+# Reasonable APT defaults (timeouts/retries)
+ARG APT_ARGS="-o Acquire::Retries=6 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Check-Valid-Until=false -o Acquire::CompressionTypes::Order::=gz"
+
+# =============================================================================
+# Builder stage
+# =============================================================================
+FROM ${CUDA_IMAGE_DEVEL} AS builder
+# Re-declare ARG inside the stage and export as ENV so $ROS_DISTRO is visible in RUN
+ARG ROS_DISTRO
+ENV ROS_DISTRO=${ROS_DISTRO}
+ENV DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC
+SHELL ["/bin/bash","-o","pipefail","-c"]
+
+# 0) Base OS tools, compilers, graphics libs, and Python build deps
+RUN --mount=type=cache,id=apt-cache-builder,target=/var/cache/apt,sharing=locked \
+    set -e; \
+    rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock /var/lib/apt/lists/lock; \
+    apt-get update $APT_ARGS && \
     apt-get install -y --no-install-recommends \
-        tzdata locales ca-certificates \
-        curl gnupg lsb-release software-properties-common \
-        build-essential git cmake \
-        python3 python3-dev python3-venv python3-pip python3-setuptools \
-        libeigen3-dev libboost-all-dev libpcl-dev liboctomap-dev libomp-dev \
-        mesa-utils libxext6 libx11-6 libxrender1 libxkbcommon-x11-0 x11-apps \
-    && ln -fs /usr/share/zoneinfo/$TZ /etc/localtime \
-    && dpkg-reconfigure --frontend noninteractive tzdata \
-    && locale-gen en_US.UTF-8 \
-    && rm -rf /var/lib/apt/lists/*
-
-# -----------------------------------------------------------------------------
-# 2. Install ROS 2 Jazzy from ros2‑apt‑source
-#
-# ROS 2 packages are not in the default Ubuntu archive for Noble.  The
-# ros2‑apt‑source package configures apt repositories and keys.  We install
-# ros-dev-tools to get colcon, rosdep and other development helpers.
-# See: https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html
-# -----------------------------------------------------------------------------
-RUN apt-get update && apt-get install -y --no-install-recommends curl && \
-    export ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | grep -F "tag_name" | awk -F\" '{print $4}') && \
-    curl -L -o /tmp/ros2-apt-source.deb \
-        "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.$(. /etc/os-release && echo $VERSION_CODENAME)_all.deb" && \
-    dpkg -i /tmp/ros2-apt-source.deb && rm -f /tmp/ros2-apt-source.deb && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-        ros-jazzy-desktop ros-jazzy-ompl ros-dev-tools \
-    && rm -rf /var/lib/apt/lists/*
-
-# -----------------------------------------------------------------------------
-# 3. Install Gazebo Harmonic (gz‑harmonic metapackage)
-#
-# Gazebo Harmonic is installed from the OSRF repository.  This will pull in
-# gz-sim and all necessary runtime dependencies.  See:
-# https://gazebosim.org/docs/harmonic/install_ubuntu/
-# -----------------------------------------------------------------------------
-RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg lsb-release && \
-    curl -fsSL https://packages.osrfoundation.org/gazebo.gpg \
-         -o /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] \
-          http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" \
-      > /etc/apt/sources.list.d/gazebo-stable.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends gz-harmonic && \
+      tzdata locales ca-certificates curl gnupg lsb-release software-properties-common \
+      build-essential git wget cmake ninja-build \
+      python3 python3-venv python3-pip python3-setuptools python3-dev \
+      libeigen3-dev libboost-all-dev libpcl-dev liboctomap-dev libomp-dev \
+      mesa-utils libxext6 libx11-6 libxrender1 libxkbcommon-x11-0 x11-apps && \
+    ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime && \
+    dpkg-reconfigure --frontend noninteractive tzdata && \
+    locale-gen en_US.UTF-8 && \
     rm -rf /var/lib/apt/lists/*
 
-# -----------------------------------------------------------------------------
-# 4. Python virtual environment and packages
-#
-# PEP 668 marks the system Python as externally managed on Ubuntu 24.04.  To
-# install third‑party packages with pip, we create our own virtualenv under
-# /opt/venv.  We then install OSQP, stable‑baselines3 and RLQP into this
-# environment.  RLQP is installed from its Python package repository at a
-# specific commit recommended by its documentation.  See:
-# https://berkeleyautomation.github.io/rlqp/
-# -----------------------------------------------------------------------------
-RUN python3 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --no-cache-dir --upgrade pip && \
-    /opt/venv/bin/pip install --no-cache-dir \
-        osqp "stable-baselines3[extra]" && \
-    /opt/venv/bin/pip install --no-cache-dir \
-        "git+https://github.com/berkeleyautomation/rlqp-python.git@55f378e496979bd00e84cea4583ac37bfaa571a9"
+# 1) Configure ROS 2 APT repository (codename-aware + fallback)
+#    ros2-apt-source filename includes Ubuntu codename (e.g., .jammy_all.deb)
+RUN --mount=type=cache,id=apt-cache-builder,target=/var/cache/apt,sharing=locked \
+    set -e; \
+    rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock /var/lib/apt/lists/lock; \
+    apt-get update $APT_ARGS && apt-get install -y --no-install-recommends curl ca-certificates gnupg; \
+    CODENAME="$(. /etc/os-release && echo $VERSION_CODENAME)"; \
+    ROS_APT_SOURCE_VERSION="$(curl -fsSL https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | awk -F '\"' '/tag_name/{print $4; exit}')" || true; \
+    if [ -n "$ROS_APT_SOURCE_VERSION" ]; then \
+      URL="https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.${CODENAME}_all.deb"; \
+      echo "Downloading $URL"; \
+      curl -fsSL -o /tmp/ros2-apt-source.deb "$URL"; \
+      dpkg-deb -I /tmp/ros2-apt-source.deb >/dev/null; \
+      apt-get install -y /tmp/ros2-apt-source.deb; \
+      rm -f /tmp/ros2-apt-source.deb; \
+    else \
+      echo "GitHub API unavailable, falling back to manual key + sources.list"; \
+      install -m 0755 -d /etc/apt/keyrings; \
+      curl -fsSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /etc/apt/keyrings/ros-archive-keyring.gpg; \
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu ${CODENAME} main" > /etc/apt/sources.list.d/ros2.list; \
+    fi; \
+    apt-get update $APT_ARGS
 
-# -----------------------------------------------------------------------------
-# 5. Build Aerostack2 from source
-#
-# Aerostack2 provides a modular ROS 2 framework for aerial robotics.  We
-# create a dedicated workspace in /aerostack2_ws, clone the Aerostack2
-# repository and install its dependencies via rosdep.  Finally we build the
-# packages with colcon.  The repository is cloned with --depth=1 to speed up
-# fetches.  During rosdep we allow failures on init if it already exists.
-# -----------------------------------------------------------------------------
-RUN mkdir -p /aerostack2_ws/src && \
-    git clone --depth 1 https://github.com/aerostack2/aerostack2.git /aerostack2_ws/src/aerostack2 && \
-    bash -lc "source /opt/ros/${ROS_DISTRO}/setup.bash && \
-        cd /aerostack2_ws && \
-        rosdep init || true && rosdep update && \
-        rosdep install --from-paths src --ignore-src -r -y && \
-        colcon build --symlink-install"
-
-###############################################################################
-# Runtime stage: slim image with necessary runtime + built artifacts
-###############################################################################
-FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04 AS runtime
-
-ARG DEBIAN_FRONTEND=noninteractive
-
-ENV TZ=Etc/UTC \
-    LANG=en_US.UTF-8 \
-    LC_ALL=en_US.UTF-8 \
-    ROS_DISTRO=jazzy \
-    NVIDIA_VISIBLE_DEVICES=all \
-    NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
-
-# -----------------------------------------------------------------------------
-# 6. Install only runtime dependencies in final image
-#
-# We install Python (but rely on our venv for packages), curl/gnupg for
-# ros2-apt-source installation, and X11 libs for GUI clients.  We also
-# configure the timezone and locale as in the builder stage.
-# -----------------------------------------------------------------------------
-RUN apt-get update && \
+# 2) ROS 2 Humble + dev tools
+RUN --mount=type=cache,id=apt-cache-builder,target=/var/cache/apt,sharing=locked \
+    set -e; \
+    rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock /var/lib/apt/lists/lock; \
+    apt-get update $APT_ARGS && \
     apt-get install -y --no-install-recommends \
-        tzdata locales ca-certificates curl gnupg lsb-release software-properties-common \
-        python3 \
-        mesa-utils libxext6 libx11-6 libxrender1 libxkbcommon-x11-0 x11-apps \
-    && ln -fs /usr/share/zoneinfo/$TZ /etc/localtime \
-    && dpkg-reconfigure --frontend noninteractive tzdata \
-    && locale-gen en_US.UTF-8 \
-    && rm -rf /var/lib/apt/lists/*
-
-# -----------------------------------------------------------------------------
-# 7. Install ROS 2 Jazzy and Gazebo Harmonic in runtime
-#
-# We repeat the ros2-apt-source and gz-harmonic installation here, but
-# without the dev tools.  This avoids copying large directory trees from
-# builder and ensures the runtime image can run ROS 2 commands directly.
-# -----------------------------------------------------------------------------
-RUN apt-get update && apt-get install -y --no-install-recommends curl && \
-    export ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | grep -F "tag_name" | awk -F\" '{print $4}') && \
-    curl -L -o /tmp/ros2-apt-source.deb \
-        "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.$(. /etc/os-release && echo $VERSION_CODENAME)_all.deb" && \
-    dpkg -i /tmp/ros2-apt-source.deb && rm -f /tmp/ros2-apt-source.deb && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-        ros-jazzy-desktop ros-jazzy-ompl ros-dev-tools && \
+      ros-${ROS_DISTRO}-desktop \
+      ros-${ROS_DISTRO}-ompl \
+      ros-dev-tools \
+      python3-colcon-common-extensions && \
     rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg lsb-release && \
-    curl -fsSL https://packages.osrfoundation.org/gazebo.gpg \
-         -o /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] \
-          http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" \
-      > /etc/apt/sources.list.d/gazebo-stable.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends gz-harmonic && \
+# 3) Gazebo integration (ros_gz) and extras used by Aerostack2 behaviors
+RUN --mount=type=cache,id=apt-cache-builder,target=/var/cache/apt,sharing=locked \
+    set -e; \
+    rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock /var/lib/apt/lists/lock; \
+    apt-get update $APT_ARGS && \
+    apt-get install -y --no-install-recommends \
+        ros-${ROS_DISTRO}-ros-gz \
+        ros-${ROS_DISTRO}-ros-gz-bridge \
+        ros-${ROS_DISTRO}-ros-gz-interfaces \
+        ros-${ROS_DISTRO}-ros-gz-sim \
+        ros-${ROS_DISTRO}-pointcloud-to-laserscan \
+        ros-${ROS_DISTRO}-behaviortree-cpp-v3 \
+        ros-${ROS_DISTRO}-nav2-msgs \
+        ros-${ROS_DISTRO}-nav2-behavior-tree \
+        ros-${ROS_DISTRO}-sdformat-urdf \
+        ros-${ROS_DISTRO}-geographic-msgs \
+        python3-jinja2 python3-pydantic \
+        libgeographic-dev libbenchmark-dev libncurses-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# -----------------------------------------------------------------------------
-# 8. Copy built workspaces and virtual environment from builder
-#
-# The Aerostack2 workspace built in the builder stage is copied into the
-# runtime image.  Similarly, we bring over the Python virtualenv containing
-# OSQP, Stable‑Baselines3 and RLQP.  We do not copy the entire /usr/local or
-# /opt/ros from builder to keep the runtime image smaller; instead we
-# reinstall ROS 2 packages directly in this stage.
-# -----------------------------------------------------------------------------
+# 3.5) Intel RealSense APT repository + SDK (builder)
+#      - We install librealsense2-dev for headers/CMake config and librealsense2-utils for tools.
+#      - DO NOT install librealsense2-dkms in the container (kernel modules should be on the host).
+RUN --mount=type=cache,id=apt-cache-builder,target=/var/cache/apt,sharing=locked \
+    set -e; \
+    install -m 0755 -d /etc/apt/keyrings; \
+    curl -fsSL https://librealsense.intel.com/Debian/librealsense.pgp > /etc/apt/keyrings/librealsense.pgp; \
+    CODENAME="$(. /etc/os-release && echo $VERSION_CODENAME)"; \
+    echo "deb [signed-by=/etc/apt/keyrings/librealsense.pgp] https://librealsense.intel.com/Debian/apt-repo ${CODENAME} main" \
+      > /etc/apt/sources.list.d/librealsense.list; \
+    apt-get update $APT_ARGS && \
+    apt-get install -y --no-install-recommends librealsense2-dev librealsense2-utils && \
+    rm -rf /var/lib/apt/lists/*
+
+# 4) Python virtualenv + RL libs (use pip cache)
+RUN python3 -m venv /opt/venv && /opt/venv/bin/python -m pip install --upgrade pip
+RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip,sharing=locked \
+    /opt/venv/bin/pip install osqp "stable-baselines3[extra]" pymap3d
+
+# 5) RLQP python wrapper: pin to a known good commit (from RLQP README)
+RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip,sharing=locked \
+    /opt/venv/bin/pip install \
+    "git+https://github.com/berkeleyautomation/rlqp-python.git@55f378e496979bd00e84cea4583ac37bfaa571a9"
+
+# 6) Aerostack2 from source (Humble target)
+ENV AS2_WS=/aerostack2_ws
+RUN mkdir -p ${AS2_WS}/src && \
+    git clone --depth 1 https://github.com/aerostack2/aerostack2.git ${AS2_WS}/src/aerostack2
+
+# 7) Resolve ROS deps with rosdep and build (colcon)
+#    NOTE: we no longer skip librealsense2; the SDK/dev package is already installed above.
+RUN --mount=type=cache,id=apt-cache-builder,target=/var/cache/apt,sharing=locked \
+    set -e; \
+    rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock /var/lib/apt/lists/lock; \
+    bash -lc 'source /opt/ros/${ROS_DISTRO}/setup.bash && \
+      apt-get update '"$APT_ARGS"' && \
+      cd ${AS2_WS} && \
+      rosdep init || true && rosdep update && \
+      rosdep install --from-paths src --ignore-src -r -y --rosdistro ${ROS_DISTRO}'
+RUN --mount=type=cache,id=apt-cache-builder,target=/var/cache/apt,sharing=locked \
+    set -e; \
+    bash -lc 'source /opt/ros/${ROS_DISTRO}/setup.bash && \
+      cd ${AS2_WS} && \
+      colcon build \
+        --symlink-install \
+        --parallel-workers 4 \
+        --event-handlers console_cohesion+ \
+        --cmake-args -DCMAKE_BUILD_TYPE=Release'
+# =============================================================================
+# Runtime stage
+# =============================================================================
+FROM ${CUDA_IMAGE_RUNTIME} AS runtime
+# Re-declare ARG and export as ENV in this stage as well
+ARG ROS_DISTRO
+ENV ROS_DISTRO=${ROS_DISTRO}
+ARG APT_ARGS="-o Acquire::Retries=6 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Check-Valid-Until=false -o Acquire::CompressionTypes::Order::=gz"
+ENV DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC
+SHELL ["/bin/bash","-o","pipefail","-c"]
+
+# (A) Base runtime prereqs
+RUN --mount=type=cache,id=apt-cache-runtime,target=/var/cache/apt,sharing=locked \
+    set -e; \
+    rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock /var/lib/apt/lists/lock; \
+    apt-get update $APT_ARGS && \
+    apt-get install -y --no-install-recommends locales ca-certificates curl gnupg && \
+    locale-gen en_US.UTF-8 && \
+    rm -rf /var/lib/apt/lists/*
+
+# (B) Configure ROS APT repo in runtime (same robust logic as builder)
+RUN --mount=type=cache,id=apt-cache-runtime,target=/var/cache/apt,sharing=locked \
+    set -e; \
+    rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock /var/lib/apt/lists/lock; \
+    apt-get update $APT_ARGS && apt-get install -y --no-install-recommends curl ca-certificates gnupg; \
+    CODENAME="$(. /etc/os-release && echo $VERSION_CODENAME)"; \
+    ROS_APT_SOURCE_VERSION="$(curl -fsSL https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | awk -F '\"' '/tag_name/{print $4; exit}')" || true; \
+    if [ -n "$ROS_APT_SOURCE_VERSION" ]; then \
+      URL="https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.${CODENAME}_all.deb"; \
+      echo "Downloading $URL"; \
+      curl -fsSL -o /tmp/ros2-apt-source.deb "$URL"; \
+      dpkg-deb -I /tmp/ros2-apt-source.deb >/dev/null; \
+      apt-get install -y /tmp/ros2-apt-source.deb; \
+      rm -f /tmp/ros2-apt-source.deb; \
+    else \
+      echo "GitHub API unavailable, falling back to manual key + sources.list"; \
+      install -m 0755 -d /etc/apt/keyrings; \
+      curl -fsSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /etc/apt/keyrings/ros-archive-keyring.gpg; \
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu ${CODENAME} main" > /etc/apt/sources.list.d/ros2.list; \
+    fi; \
+    apt-get update $APT_ARGS
+
+# (B.5) Intel RealSense APT repository + runtime libs
+#       - Install librealsense2 (runtime shared libs) and librealsense2-utils (tools).
+#       - DKMS should be installed on the HOST if you need to access a physical camera.
+RUN --mount=type=cache,id=apt-cache-runtime,target=/var/cache/apt,sharing=locked \
+    set -e; \
+    install -m 0755 -d /etc/apt/keyrings; \
+    curl -fsSL https://librealsense.intel.com/Debian/librealsense.pgp > /etc/apt/keyrings/librealsense.pgp; \
+    CODENAME="$(. /etc/os-release && echo $VERSION_CODENAME)"; \
+    echo "deb [signed-by=/etc/apt/keyrings/librealsense.pgp] https://librealsense.intel.com/Debian/apt-repo ${CODENAME} main" \
+      > /etc/apt/sources.list.d/librealsense.list; \
+    apt-get update $APT_ARGS && \
+    apt-get install -y --no-install-recommends librealsense2 librealsense2-utils && \
+    rm -rf /var/lib/apt/lists/*
+
+# (C) Minimal ROS runtime + ros_gz bridge
+RUN --mount=type=cache,id=apt-cache-runtime,target=/var/cache/apt,sharing=locked \
+    set -e; \
+    rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock /var/lib/apt/lists/lock; \
+    apt-get update $APT_ARGS && \
+    apt-get install -y --no-install-recommends \
+      ros-${ROS_DISTRO}-ros-core \
+      ros-${ROS_DISTRO}-ros-gz \
+      ros-${ROS_DISTRO}-ros-gz-bridge && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy venv and the built workspace from builder
+COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /aerostack2_ws /aerostack2_ws
-COPY --from=builder /opt/venv     /opt/venv
 
-# -----------------------------------------------------------------------------
-# 9. Create a non‑root user for development
-#
-# Running as a normal user improves security and avoids permission issues
-# when interacting with host‑mounted volumes.  The UID can be overridden
-# via build args.
-# -----------------------------------------------------------------------------
-ARG USER=ros
-ARG UID=1000
-RUN useradd -m -u ${UID} ${USER}
+# Entrypoint (expected to source ROS & overlays and expose venv on PATH)
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-USER ${USER}
-ENV HOME=/home/${USER}
-WORKDIR ${HOME}
+ENV PATH="/opt/venv/bin:${PATH}" \
+    AEROSTACK2_PATH=/aerostack2_ws \
+    ROS_DOMAIN_ID=0
 
-# -----------------------------------------------------------------------------
-# 10. Configure environment variables
-#
-# We expose the venv on PATH via the entrypoint.  Set ROS_DOMAIN_ID to 0
-# by default for local DDS networks.  AEROSTACK2_PATH can be used by
-# developers and tools like the as2_cli.
-# -----------------------------------------------------------------------------
-ENV VIRTUAL_ENV=/opt/venv
-ENV PATH="/opt/venv/bin:${PATH}"
-ENV ROS_DOMAIN_ID=0
-ENV AEROSTACK2_PATH=/aerostack2_ws/src/aerostack2
-
-# -----------------------------------------------------------------------------
-# 11. Copy the entrypoint script
-#
-# The entrypoint sources ROS 2 and Aerostack2 overlays, adds the venv
-# to PATH, prints GPU diagnostics and executes the given command.  See
-# entrypoint.sh for details.  We ensure it is executable.
-# -----------------------------------------------------------------------------
-COPY entrypoint.sh /ros_entrypoint.sh
-RUN chmod +x /ros_entrypoint.sh
-
-# -----------------------------------------------------------------------------
-# 12. Default command
-#
-# By default the container starts a bash shell.  Override CMD to run
-# your own commands, e.g. launching a simulation or training script.
-# -----------------------------------------------------------------------------
-ENTRYPOINT ["/ros_entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bash"]
+
+# OPTIONAL: switch to non-root for better security at runtime
+# ARG USERNAME=ros
+# ARG USER_UID=1000
+# ARG USER_GID=1000
+# RUN groupadd -g ${USER_GID} ${USERNAME} \
+#  && useradd -m -u ${USER_UID} -g ${USER_GID} -s /bin/bash ${USERNAME} \
+#  && mkdir -p /home/${USERNAME}/.cache/pip \
+#  && chown -R ${USERNAME}:${USERNAME} /home/${USERNAME} /aerostack2_ws
+# USER ${USERNAME}
