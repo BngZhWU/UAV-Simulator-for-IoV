@@ -1,0 +1,39 @@
+# compose.yaml
+# UAV IoV Simulator — ROS 2 Humble + ros_gz + Aerostack2 + RealSense + CUDA
+
+services:
+  uav:
+    # Use a prebuilt image (recommended in CI/dev)
+    image: uav-iov-sim:humble
+
+    # Or build locally from the Dockerfile in the same folder (uncomment to use)
+    # build:
+    #   context: .
+    #   dockerfile: UAV_Simulator_Dockerfile
+
+    container_name: uav_iov_sim
+
+    # Request GPU(s) via Compose Deploy spec (Docker Desktop/Engine with NVIDIA toolkit)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all          # or set an integer like: 1
+              capabilities: [gpu]
+
+    # Linux X11 GUI (WSLg usually sets DISPLAY automatically; this mount is harmless there)
+    environment:
+      - DISPLAY=${DISPLAY}
+      - ROS_DOMAIN_ID=0
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # Mount your dev workspace if needed
+      - ./planning_ws:/planning_ws
+
+    # USB passthrough for RealSense; on WSL2 first attach USB to the distro via usbipd-win
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+
+    tty: true
+    stdin_open: true
