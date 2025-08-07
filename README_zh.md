@@ -1,5 +1,6 @@
 # UAV-Simulator-for-IoV Docker 镜像配置文档
 
+请以英文文档为准，中文文档有大量未更新内容，命令行可能不能顺利运行。
 本文档说明如何在 **Ubuntu Noble 24.04** 环境构建一份包含 ROS 2 Jazzy Jalisco、Gazebo Harmonic、OSQP、RLQP、OMPL、Fast-Planner 和 Stable Baselines3 的容器镜像，以支持多无人机 IoV 仿真与强化学习调参研究。
 
 本配置方案已在window环境中测试并可以使用。
